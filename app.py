@@ -5,21 +5,21 @@ import glob
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-# إعداد الصفحة لتناسب الموبايل بشكل عمودي ومريح
+# Page configuration optimized for mobile viewport
 st.set_page_config(
-    page_title="تفاصيل شركات التأمين - صيدلية H2O",
+    page_title="Insurance Claims - H2O Pharmacy",
     page_icon="🏥",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# إدارة التنقل بين الصفحات عبر الذاكرة المؤقتة (Session State)
+# Navigation state management
 if "page" not in st.session_state:
     st.session_state.page = "main"
 if "selected_company" not in st.session_state:
     st.session_state.selected_company = None
 
-# تصفيف مخصص لمحاكاة تصميم البطاقات الزرقاء
+# Custom styling for professional blue cards
 st.markdown("""
     <style>
     .company-card {
@@ -50,159 +50,171 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# مجلد قراءة الملفات
-CLAIMS_DIR = "."
-excel_files = glob.glob(os.path.join(CLAIMS_DIR, "*.xlsx"))
-
-if not excel_files:
-    st.warning("⚠️ لا توجد ملفات إكسل داخل المجلد حالياً.")
-else:
-    companies_data = {}
-    last_modified_time = None
-    all_dates = []
+# Cache data loading for 10 minutes to prevent continuous disk reading and freeze issues
+@st.cache_data(ttl=600, show_spinner="Loading insurance dashboard data... ⏳")
+def load_all_claims_data():
+    CLAIMS_DIR = "."
+    excel_files_list = glob.glob(os.path.join(CLAIMS_DIR, "*.xlsx"))
     
-    # قراءة وتجهيز البيانات الأساسية
-    for file in excel_files:
+    comp_data = {}
+    last_mod_time = None
+    all_dt = []
+    
+    if not excel_files_list:
+        return excel_files_list, comp_data, last_mod_time, all_dt
+
+    for file in excel_files_list:
         try:
             mtime = os.path.getmtime(file)
             f_time = datetime.fromtimestamp(mtime)
-            if last_modified_time is None or f_time > last_modified_time:
-                last_modified_time = f_time
+            if last_mod_time is None or f_time > last_mod_time:
+                last_mod_time = f_time
                 
             df_file = pd.read_excel(file)
             
             if "تاريخ البيع" in df_file.columns:
                 df_file["تاريخ البيع"] = pd.to_datetime(df_file["تاريخ البيع"], errors='coerce')
-                all_dates.extend(df_file["تاريخ البيع"].dropna().tolist())
+                all_dt.extend(df_file["تاريخ البيع"].dropna().tolist())
                 
             if "تاريخ الدفعة" in df_file.columns:
                 df_file["تاريخ الدفعة"] = pd.to_datetime(df_file["تاريخ الدفعة"], errors='coerce')
                 
+            # Numeric conversions
             df_file["القيمة المطلوبة"] = pd.to_numeric(df_file["القيمة المطلوبة"], errors='coerce').fillna(0)
             df_file["المدفوع"] = pd.to_numeric(df_file["المدفوع"], errors='coerce').fillna(0)
             df_file["المتبقي"] = df_file["القيمة المطلوبة"] - df_file["المدفوع"]
             
             company_name = os.path.splitext(os.path.basename(file))[0]
-            companies_data[company_name] = df_file
+            comp_data[company_name] = df_file
             
         except Exception as e:
-            st.error(f"خطأ في قراءة الملف {os.path.basename(file)}: {e}")
+            st.error(f"Error reading file {os.path.basename(file)}: {e}")
+            
+    return excel_files_list, comp_data, last_mod_time, all_dt
 
-    if companies_data:
-        # تحديد نطاق الـ 12 شهراً الأخيرة
-        if all_dates:
-            latest_date_in_data = max(all_dates)
-            start_date_12m = latest_date_in_data - relativedelta(months=11)
-            start_date_12m = start_date_12m.replace(day=1)
-            date_range_str = f"من {start_date_12m.strftime('%Y/%m')} وحتى {latest_date_in_data.strftime('%Y/%m')}"
-        else:
-            latest_date_in_data = datetime.now()
-            start_date_12m = latest_date_in_data - relativedelta(months=11)
-            start_date_12m = start_date_12m.replace(day=1)
-            date_range_str = "آخر 12 شهر"
+# Load optimized data
+excel_files, companies_data, last_modified_time, all_dates = load_all_claims_data()
 
-        # عرض الشعار العلوي
-        if os.path.exists("logo.png"):
-            st.image("logo.png", width=180, use_container_width=False)
-        elif os.path.exists("logo.jpg"):
-            st.image("logo.jpg", width=180, use_container_width=False)
+# Render interface
+if not excel_files:
+    st.warning("⚠️ No Excel files found in the directory.")
+elif companies_data:
+    # Filter the last 12 months based on the latest available transaction date
+    if all_dates:
+        latest_date_in_data = max(all_dates)
+        start_date_12m = latest_date_in_data - relativedelta(months=11)
+        start_date_12m = start_date_12m.replace(day=1)
+        date_range_str = f"From {start_date_12m.strftime('%Y/%m')} To {latest_date_in_data.strftime('%Y/%m')}"
+    else:
+        latest_date_in_data = datetime.now()
+        start_date_12m = latest_date_in_data - relativedelta(months=11)
+        start_date_12m = start_date_12m.replace(day=1)
+        date_range_str = "Last 12 Months"
 
-        # ==================== الصفحة الأولى ====================
-        if st.session_state.page == "main":
-            st.markdown("<h3 style='text-align: center; color: #333;'>تفاصيل شركات التأمين</h3>", unsafe_allow_html=True)
-            update_str = last_modified_time.strftime('%Y/%m/%d') if last_modified_time else "2026/07/13"
-            st.markdown(f"<div style='text-align: center; font-size: 18px; color: #555;'>آخر تحديث {update_str}</div>", unsafe_allow_html=True)
-            st.markdown(f"<div style='text-align: center; font-size: 18px; color: #555; margin-bottom: 20px;'>{date_range_str}</div>", unsafe_allow_html=True)
+    # Logo display
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=180, use_container_width=False)
+    elif os.path.exists("logo.jpg"):
+        st.image("logo.jpg", width=180, use_container_width=False)
 
-            for comp_name, df_orig in companies_data.items():
-                if "تاريخ البيع" in df_orig.columns and all_dates:
-                    df_comp = df_orig[(df_orig["تاريخ البيع"] >= pd.Timestamp(start_date_12m)) & 
-                                      (df_orig["تاريخ البيع"] <= pd.Timestamp(latest_date_in_data))].copy()
-                else:
-                    df_comp = df_orig.copy()
+    # ==================== MAIN PAGE ====================
+    if st.session_state.page == "main":
+        st.markdown("<h3 style='text-align: center; color: #333;'>Insurance Companies Overview</h3>", unsafe_allow_html=True)
+        update_str = last_modified_time.strftime('%Y/%m/%d') if last_modified_time else datetime.now().strftime('%Y/%m/%d')
+        st.markdown(f"<div style='text-align: center; font-size: 18px; color: #555;'>Last updated: {update_str}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: center; font-size: 18px; color: #555; margin-bottom: 20px;'>{date_range_str}</div>", unsafe_allow_html=True)
 
-                comp_requested = df_comp["القيمة المطلوبة"].sum()
-                comp_paid = df_comp["المدفوع"].sum()
-                comp_remaining = df_comp["المتبقي"].sum()
-                
-                st.markdown(f"""
-                    <div class="company-card">
-                        <div class="company-title">{comp_name}</div>
-                        <div class="metric-row"><span class="metric-val">{comp_requested:,.3f}</span> <span>المطالبات</span></div>
-                        <div class="metric-row"><span class="metric-val">{comp_paid:,.3f}</span> <span>المدفوع</span></div>
-                        <div class="metric-row"><span class="metric-val">{comp_remaining:,.3f}</span> <span>المتبقي</span></div>
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                if st.button(f"🔎 عرض تفاصيل وتقارير {comp_name}", key=f"btn_{comp_name}"):
-                    st.session_state.selected_company = comp_name
-                    st.session_state.page = "details"
-                    st.rerun()
-
-        # ==================== الصفحة الثانية ====================
-        elif st.session_state.page == "details":
-            comp_name = st.session_state.selected_company
-            df_orig_target = companies_data[comp_name].copy()
-
-            if "تاريخ البيع" in df_orig_target.columns and all_dates:
-                df_target = df_orig_target[(df_orig_target["تاريخ البيع"] >= pd.Timestamp(start_date_12m)) & 
-                                           (df_orig_target["تاريخ البيع"] <= pd.Timestamp(latest_date_in_data))].copy()
+        for comp_name, df_orig in companies_data.items():
+            # Apply 12-month boundary
+            if "تاريخ البيع" in df_orig.columns and all_dates:
+                df_comp = df_orig[(df_orig["تاريخ البيع"] >= pd.Timestamp(start_date_12m)) & 
+                                  (df_orig["تاريخ البيع"] <= pd.Timestamp(latest_date_in_data))].copy()
             else:
-                df_target = df_orig_target.copy()
+                df_comp = df_orig.copy()
 
-            if st.button("⬅️ عودة للصفحة الرئيسية"):
-                st.session_state.page = "main"
-                st.session_state.selected_company = None
+            comp_requested = df_comp["القيمة المطلوبة"].sum()
+            comp_paid = df_comp["المدفوع"].sum()
+            comp_remaining = df_comp["المتبقي"].sum()
+            
+            st.markdown(f"""
+                <div class="company-card">
+                    <div class="company-title">{comp_name}</div>
+                    <div class="metric-row"><span class="metric-val">{comp_requested:,.3f}</span> <span>المطالبات (Requested)</span></div>
+                    <div class="metric-row"><span class="metric-val">{comp_paid:,.3f}</span> <span>المدفوع (Paid)</span></div>
+                    <div class="metric-row"><span class="metric-val">{comp_remaining:,.3f}</span> <span>المتبقي (Remaining)</span></div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button(f"🔎 View details for {comp_name}", key=f"btn_{comp_name}"):
+                st.session_state.selected_company = comp_name
+                st.session_state.page = "details"
                 st.rerun()
 
-            st.markdown(f"<h2 style='text-align: center; color: #104e70;'>شركة: {comp_name}</h2>", unsafe_allow_html=True)
-            st.markdown("---")
+    # ==================== DETAILS PAGE ====================
+    elif st.session_state.page == "details":
+        comp_name = st.session_state.selected_company
+        df_orig_target = companies_data[comp_name].copy()
 
-            if "Insurance Company Name" in df_target.columns:
-                box_options = ["الكل"] + list(df_target["Insurance Company Name"].dropna().unique())
-                selected_box = st.selectbox("🎯 تصفية حسب صندوق التأمين الفرعي:", box_options)
-                if selected_box != "الكل":
-                    df_target = df_target[df_target["Insurance Company Name"] == selected_box]
+        # Apply 12-month boundary
+        if "تاريخ البيع" in df_orig_target.columns and all_dates:
+            df_target = df_orig_target[(df_orig_target["تاريخ البيع"] >= pd.Timestamp(start_date_12m)) & 
+                                       (df_orig_target["تاريخ البيع"] <= pd.Timestamp(latest_date_in_data))].copy()
+        else:
+            df_target = df_orig_target.copy()
 
-            st.markdown("### 📅 التقرير المالي الشهري (آخر 12 شهر)")
-            if "تاريخ البيع" in df_target.columns and not df_target.empty:
-                df_target["الشهر"] = df_target["تاريخ البيع"].dt.to_period("M")
+        if st.button("⬅️ Back to Main Page"):
+            st.session_state.page = "main"
+            st.session_state.selected_company = None
+            st.rerun()
+
+        st.markdown(f"<h2 style='text-align: center; color: #104e70;'>Company: {comp_name}</h2>", unsafe_allow_html=True)
+        st.markdown("---")
+
+        if "Insurance Company Name" in df_target.columns:
+            box_options = ["All"] + list(df_target["Insurance Company Name"].dropna().unique())
+            selected_box = st.selectbox("🎯 Filter by sub-insurance fund:", box_options)
+            if selected_box != "All":
+                df_target = df_target[df_target["Insurance Company Name"] == selected_box]
+
+        st.markdown("### 📅 Monthly Financial Report (Last 12 Months)")
+        if "تاريخ البيع" in df_target.columns and not df_target.empty:
+            df_target["Month"] = df_target["تاريخ البيع"].dt.to_period("M")
+            
+            monthly_df = df_target.groupby("Month").agg({
+                "القيمة المطلوبة": "sum",
+                "المدفوع": "sum",
+                "المتبقي": "sum"
+            }).sort_index(ascending=False).head(12)
+            
+            total_remaining_sum = monthly_df["المتبقي"].sum()
+            
+            monthly_df.index = monthly_df.index.astype(str)
+            monthly_df.columns = ["Total Claims", "Total Paid", "Total Remaining"]
+            
+            st.dataframe(monthly_df.style.format("{:,.3f} JOD"), use_container_width=True)
+            st.info(f"📊 **Total outstanding balance for the listed period:** {total_remaining_sum:,.3f} JOD")
+        else:
+            st.info("No transaction date records available to generate monthly statistics.")
+
+        st.markdown("---")
+
+        st.markdown("### 💳 Received Payments Ledger")
+        if "تاريخ الدفعة" in df_target.columns and "المدفوع" in df_target.columns:
+            df_payments = df_target[df_target["تاريخ الدفعة"].notna() & (df_target["المدفوع"] > 0)].copy()
+            
+            if "تاريخ الدفعة" in df_payments.columns and all_dates:
+                df_payments = df_payments[(df_payments["تاريخ الدفعة"] >= pd.Timestamp(start_date_12m)) & 
+                                          (df_payments["تاريخ الدفعة"] <= pd.Timestamp(latest_date_in_data))].copy()
+
+            if not df_payments.empty:
+                df_payments = df_payments.sort_values(by="تاريخ الدفعة", ascending=False)
+                df_payments["Payment Date"] = df_payments["تاريخ الدفعة"].dt.strftime('%Y-%m-%d')
+                payments_summary = df_payments.groupby("Payment Date")["المدفوع"].sum().reset_index()
+                payments_summary.columns = ["📆 Payment Date", "💰 Received Amount"]
                 
-                monthly_df = df_target.groupby("الشهر").agg({
-                    "القيمة المطلوبة": "sum",
-                    "المدفوع": "sum",
-                    "المتبقي": "sum"
-                }).sort_index(ascending=False).head(12)
-                
-                total_remaining_sum = monthly_df["المتبقي"].sum()
-                
-                monthly_df.index = monthly_df.index.astype(str)
-                monthly_df.columns = ["مجموع المطالبات", "مجموع المدفوع", "المجموع المتبقي"]
-                
-                st.dataframe(monthly_df.style.format("{:,.3f} د.أ"), use_container_width=True)
-                st.info(f"📊 **إجمالي المتبقي المستحق لكافة الأشهُر المذكورة أعلاه:** {total_remaining_sum:,.3f} د.أ")
+                payments_summary = payments_summary.sort_values(by="📆 Payment Date", ascending=False)
+                st.dataframe(payments_summary.style.format({"💰 Received Amount": "{:,.3f} JOD"}), use_container_width=True)
             else:
-                st.info("لا توجد بيانات تواريخ متوفرة لتوليد جدول الأشهر.")
-
-            st.markdown("---")
-
-            st.markdown("### 💳 سجل وتاريخ الدفعات المستلمة")
-            if "تاريخ الدفعة" in df_target.columns and "المدفوع" in df_target.columns:
-                df_payments = df_target[df_target["تاريخ الدفعة"].notna() & (df_target["المدفوع"] > 0)].copy()
-                
-                if "تاريخ الدفعة" in df_payments.columns and all_dates:
-                    df_payments = df_payments[(df_payments["تاريخ الدفعة"] >= pd.Timestamp(start_date_12m)) & 
-                                              (df_payments["تاريخ الدفعة"] <= pd.Timestamp(latest_date_in_data))].copy()
-
-                if not df_payments.empty:
-                    df_payments = df_payments.sort_values(by="تاريخ الدفعة", ascending=False)
-                    df_payments["تاريخ الدفعة"] = df_payments["تاريخ الدفعة"].dt.strftime('%Y-%m-%d')
-                    payments_summary = df_payments.groupby("تاريخ الدفعة")["المدفوع"].sum().reset_index()
-                    payments_summary.columns = ["📆 تاريخ الدفعة", "💰 قيمة الدفعة المستلمة"]
-                    
-                    payments_summary = payments_summary.sort_values(by="📆 تاريخ الدفعة", ascending=False)
-                    st.dataframe(payments_summary.style.format({"💰 قيمة الدفعة المستلمة": "{:,.3f} د.أ"}), use_container_width=True)
-                else:
-                    st.info("لا توجد دفعات مسجلة ومرحلة بـ 'تاريخ الدفعة' داخل هذا الملف لهذه الفترة.")
-            else:
-                st.warning("لم يتم العثور على حقول 'تاريخ الدفعة' أو 'المدفوع' لإنشاء كشف الدفعات.")
+                st.info("No recorded payments found for this period.")
+        else:
+            st.warning("Could not find payment data columns to generate payments ledger.")
